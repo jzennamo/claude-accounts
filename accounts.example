@@ -1,0 +1,5 @@
+# Accounts for `claude-acct setup` — copy to ~/.config/claude-accounts/accounts (or pass the file).
+# One per line: <name> <email>. "default" is the plain `claude` login in ~/.claude.
+default   me@company.com
+personal  me@gmail.com
+team      me@team-org.com

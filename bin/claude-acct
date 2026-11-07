@@ -1,0 +1,177 @@
+#!/usr/bin/env bash
+# claude-acct — use several Claude accounts on one Mac without signing in every time.
+#
+# Claude Code (CLI):
+#   claude-acct setup [FILE] [--desktop]  sign in every account in a list, one after another
+#   claude-acct add <name> [email]        sign in one account (private browser window, e-mail pre-filled)
+#   claude-acct list                      accounts and their e-mails
+#   claude-acct <name> [claude args...]   run claude as that account
+#   claude-acct env <name>                print the export line:  eval "$(claude-acct env work)"
+#   claude-acct rm <name>                 forget an account (token deleted, folder to the Trash)
+# Claude desktop app:
+#   claude-acct desktop list|switch <name>|new|name <name>|forget <name>   (claude-acct desktop --help)
+#
+# Each account lives in its own config dir (~/.claude-accounts/<name>; "default" is ~/.claude) with its
+# own keychain token, so it is signed in once and then refreshes itself.
+#
+# Account list for `setup` (default ~/.config/claude-accounts/accounts), one per line:
+#   personal  me@gmail.com
+#   work      me@company.com
+set -euo pipefail
+ROOT="$HOME/.claude-accounts"
+LIST_DEFAULT="$HOME/.config/claude-accounts/accounts"
+SHARED=(CLAUDE.md settings.json skills agents commands keybindings.json)
+HERE=$(dirname "$(readlink -f "$0")")
+TTY=${CLAUDE_ACCT_TTY:-/dev/tty}   # tests feed answers with CLAUDE_ACCT_TTY=/dev/stdin
+
+die() { echo "error: $*" >&2; exit 1; }
+dir_for() { [ "$1" = default ] && echo "$HOME/.claude" || echo "$ROOT/$1"; }
+json_of() { [ "$1" = "$HOME/.claude" ] && echo "$HOME/.claude.json" || echo "$1/.claude.json"; }
+# identity = whose token is in the keychain (falls back to .claude.json); see claude_acct_id.py
+email_of() { local e; e=$(python3 -I "$HERE/claude_acct_id.py" "$1" email 2>/dev/null); echo "${e:-(not signed in)}"; }
+uuid_of() { python3 -I "$HERE/claude_acct_id.py" "$1" uuid 2>/dev/null || true; }
+svc_of() { [ "$1" = "$HOME/.claude" ] && echo "Claude Code-credentials" ||
+  printf 'Claude Code-credentials-%s' "$(printf %s "$1" | shasum -a 256 | cut -c1-8)"; }
+lower() { tr '[:upper:]' '[:lower:]' <<<"$1"; }
+valid_name() { [[ $1 =~ ^[A-Za-z0-9._-]+$ ]]; }
+all_dirs() { echo "$HOME/.claude"; for d in "$ROOT"/*/; do [ -d "$d" ] && echo "${d%/}"; done; return 0; }
+name_of_dir() { [ "$1" = "$HOME/.claude" ] && echo default || basename "$1"; }
+
+forget_login() { # dir: delete its keychain token and (unless default) move the dir to the Trash
+  security delete-generic-password -a "${USER}" -s "$(svc_of "$1")" >/dev/null 2>&1 || true
+  if [ "$1" != "$HOME/.claude" ]; then mkdir -p "$HOME/.Trash"; mv "$1" "$HOME/.Trash/claude-acct-$(basename "$1")-$(date +%s)"; fi
+}
+
+# sign_in <name> [email] — one sign-in; returns 0 ok, 1 failed, 2 wrong/duplicate account (removed again)
+sign_in() {
+  local n=$1 email=${2:-} d u o
+  d=$(dir_for "$n")
+  if [ "$d" != "$HOME/.claude" ]; then
+    mkdir -p "$d"
+    # share global instructions, settings and skills; history/projects stay per account
+    for f in "${SHARED[@]}"; do [ -e "$HOME/.claude/$f" ] && [ ! -e "$d/$f" ] && ln -s "$HOME/.claude/$f" "$d/$f"; done
+  fi
+  cat <<MSG
+
+── Signing in '$n'${email:+ as $email} ──
+The sign-in page opens in a PRIVATE browser window, so your normal browser's claude.ai login
+(possibly another account) can't be reused by mistake.
+  • Sign in with ${email:-the account you want for '$n'}.
+  • If you get an e-mail link: don't click it (it opens in your normal browser).
+    Right-click it ▸ Copy Link, and paste it into the private window.
+MSG
+  # unset what a Claude terminal may export, so the login lands in this account's own folder
+  local envs=(-u CLAUDE_CONFIG_DIR -u CLAUDE_CODE_OAUTH_TOKEN BROWSER="$HERE/open-private")
+  [ "$d" != "$HOME/.claude" ] && envs+=(CLAUDE_CONFIG_DIR="$d")
+  if ! env "${envs[@]}" claude auth login ${email:+--email "$email"}; then
+    echo "✗ $n: sign-in did not finish." >&2; return 1
+  fi
+  u=$(uuid_of "$d")
+  [ -n "$u" ] || { echo "✗ $n: no account recorded after sign-in." >&2; return 1; }
+  if [ -n "$email" ] && [ "$(lower "$(email_of "$d")")" != "$(lower "$email")" ]; then
+    echo "✗ $n: that signed in as $(email_of "$d"), not $email. Removed it again." >&2
+    forget_login "$d"; return 2
+  fi
+  while read -r o; do
+    [ "$o" = "$d" ] && continue
+    if [ "$(uuid_of "$o")" = "$u" ]; then
+      echo "✗ $n: that is $(email_of "$o"), already added as '$(name_of_dir "$o")'. Removed it again." >&2
+      forget_login "$d"; return 2
+    fi
+  done < <(all_dirs)
+  echo "✓ $n = $(email_of "$d")"
+}
+
+read_list() { sed -e 's/#.*//' "$1" | awk 'NF>=1 {print $1, (NF>=2 ? $2 : "")}'; }
+
+in_claude_desktop() { # is this shell running inside the Claude desktop app?
+  local p=$$ c i
+  for i in 1 2 3 4 5 6 7 8 9 10; do
+    p=$(ps -o ppid= -p "$p" 2>/dev/null | tr -d ' ')
+    { [ -n "$p" ] && [ "$p" != 1 ]; } || return 1
+    c=$(ps -o comm= -p "$p" 2>/dev/null); [[ $c == *Claude.app/* ]] && return 0
+  done; return 1
+}
+
+setup() {
+  local file="" desktop=0 a n e d i rc
+  for a in "$@"; do case $a in --desktop) desktop=1;; -*) die "unknown option $a";; *) file=$a;; esac; done
+  if [ -z "$file" ] && [ -f "$LIST_DEFAULT" ]; then file=$LIST_DEFAULT; fi
+  if [ -z "$file" ]; then
+    echo "List the accounts to sign in (leave the name blank to finish)."
+    mkdir -p "$(dirname "$LIST_DEFAULT")"; : > "$LIST_DEFAULT.tmp"
+    while :; do
+      read -r -p "  name (e.g. personal, or 'default' for ~/.claude): " n <"$TTY"; [ -z "$n" ] && break
+      valid_name "$n" || { echo "    letters, digits, . _ - only"; continue; }
+      read -r -p "  e-mail for $n: " e <"$TTY"
+      echo "$n $e" >> "$LIST_DEFAULT.tmp"
+    done
+    [ -s "$LIST_DEFAULT.tmp" ] || { rm -f "$LIST_DEFAULT.tmp"; die "no accounts given"; }
+    mv "$LIST_DEFAULT.tmp" "$LIST_DEFAULT"; file=$LIST_DEFAULT
+    echo "Saved the list to $file. Re-run 'claude-acct setup' any time: it only signs in what's missing."
+  fi
+  [ -f "$file" ] || die "no such file: $file"
+  if [ "$desktop" = 1 ] && in_claude_desktop; then
+    die "--desktop quits and reopens the Claude app, which would end this session. Run it from Terminal."
+  fi
+
+  local -a names=() emails=() result=()
+  while read -r n e; do
+    valid_name "$n" || die "bad account name '$n' in $file"
+    names+=("$n"); emails+=("$e")
+  done < <(read_list "$file")
+  [ ${#names[@]} -gt 0 ] || die "no accounts in $file"
+
+  echo "Claude Code: ${#names[@]} account(s) in $file"
+  for i in "${!names[@]}"; do
+    n=${names[$i]}; e=${emails[$i]}; d=$(dir_for "$n")
+    if [ -n "$(uuid_of "$d")" ] && { [ -z "$e" ] || [ "$(lower "$(email_of "$d")")" = "$(lower "$e")" ]; }; then
+      echo "✓ $n already signed in ($(email_of "$d"))"; result+=("ok"); continue
+    fi
+    while :; do
+      read -r -p $'\n'"Press return to sign in '$n'${e:+ ($e)}, or s + return to skip: " a <"$TTY"
+      if [ "$a" = s ]; then result+=("skipped"); break; fi
+      rc=0; sign_in "$n" "$e" || rc=$?
+      if [ $rc = 0 ]; then result+=("ok"); break; fi
+      read -r -p "Try '$n' again? [Y/n] " a <"$TTY"
+      if [[ $a == [nN]* ]]; then result+=("failed"); break; fi
+    done
+  done
+
+  if [ "$desktop" = 1 ]; then
+    echo; echo "Claude desktop app: for each account not saved yet, Claude quits and reopens signed out for you."
+    python3 -I "$HERE/claude-desktop-switch.py" setup "${names[@]}" || true
+  fi
+
+  echo; echo "Summary (Claude Code)"
+  for i in "${!names[@]}"; do
+    printf '  %-14s %-8s %s\n' "${names[$i]}" "${result[$i]:-?}" "$(email_of "$(dir_for "${names[$i]}")")"
+  done
+  [ "$desktop" = 1 ] && { echo "Desktop app"; python3 -I "$HERE/claude-desktop-switch.py" list | sed 's/^/  /'; }
+  return 0
+}
+
+case "${1:-list}" in
+  setup) shift; setup "$@";;
+  add)
+    n=${2:?usage: claude-acct add <name> [email]}
+    valid_name "$n" || die "name: letters, digits, . _ - only"
+    sign_in "$n" "${3:-}";;
+  list|ls)
+    while read -r d; do printf '%-14s %s\n' "$(name_of_dir "$d")" "$(email_of "$d")"; done < <(all_dirs);;
+  env)
+    d=$(dir_for "${2:?usage: claude-acct env <name>}")
+    [ "$d" = "$HOME/.claude" ] && echo "unset CLAUDE_CONFIG_DIR" || echo "export CLAUDE_CONFIG_DIR='$d'";;
+  rm)
+    n=${2:?usage: claude-acct rm <name>}; [ "$n" != default ] || die "won't remove default (~/.claude); use: claude auth logout"
+    d="$ROOT/$n"; [ -d "$d" ] || die "no account $n"
+    forget_login "$d"; echo "removed $n (folder in the Trash)";;
+  desktop)
+    shift; exec python3 -I "$HERE/claude-desktop-switch.py" "$@";;
+  -h|--help|help) sed -n '2,19p' "$0" | sed 's/^# \{0,1\}//';;
+  *)
+    n=$1; shift; d=$(dir_for "$n")
+    [ -d "$d" ] || die "no account '$n' — claude-acct add $n"
+    if [ "$d" = "$HOME/.claude" ]; then exec env -u CLAUDE_CONFIG_DIR -u CLAUDE_CODE_OAUTH_TOKEN claude "$@"
+    else exec env -u CLAUDE_CODE_OAUTH_TOKEN CLAUDE_CONFIG_DIR="$d" claude "$@"; fi;;
+esac

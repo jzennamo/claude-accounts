@@ -1,0 +1,21 @@
+#!/bin/bash
+# Used as $BROWSER for `claude auth login`: open the sign-in page in a private window, so the
+# browser's existing claude.ai session (possibly another account) isn't silently reused.
+# Override with CLAUDE_ACCT_BROWSER=chrome|brave|edge|firefox|safari.
+url=$1
+has() { [ -d "/Applications/$1.app" ] || [ -d "$HOME/Applications/$1.app" ]; }
+pick=${CLAUDE_ACCT_BROWSER:-}
+if [ -z "$pick" ]; then
+  for b in "Google Chrome:chrome" "Brave Browser:brave" "Microsoft Edge:edge" "Firefox:firefox"; do
+    has "${b%%:*}" && { pick=${b##*:}; break; }
+  done
+fi
+case ${pick:-safari} in
+  chrome)  open -na "Google Chrome"  --args --incognito --new-window "$url";;
+  brave)   open -na "Brave Browser"  --args --incognito --new-window "$url";;
+  edge)    open -na "Microsoft Edge" --args --inprivate --new-window "$url";;
+  firefox) open -na "Firefox"        --args --private-window "$url";;
+  *)       open -a Safari "$url"
+           echo "Safari has no private-window switch: if it's signed in to claude.ai as someone else," >&2
+           echo "open File ▸ New Private Window and paste this URL there: $url" >&2;;
+esac
