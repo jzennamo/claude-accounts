@@ -9,6 +9,9 @@ time you switch, and keep an eye on every account's usage limits from the menu b
   sign-in in a private browser window so the browser can't sign you in as the wrong account.
 - **Desktop app switcher**: switch the Claude desktop app between saved logins from the menu bar (it quits and
   reopens Claude).
+- **Claude in Chrome**: one Chrome profile per account, so the Claude extension (and claude.ai) stays signed in
+  to a different account in each. Switch by opening that profile from the menu. It also makes later Claude Code
+  sign-ins one click, since they open in the account's own profile.
 - **Claude Usage menu bar app**: each account's 5-hour and weekly limits, with reset times.
 
 It is also a [Claude Code skill](https://docs.claude.com/en/docs/claude-code/skills): with it installed,
@@ -31,7 +34,7 @@ Use `--no-app` for just the command, and `--uninstall` to remove everything (you
 ## Sign in all your accounts
 
 ```bash
-claude-acct setup --desktop
+claude-acct setup --all        # = --chrome --desktop; or pick either, or neither (Claude Code only)
 ```
 
 The first time, it asks for your accounts (name + e-mail) and saves them to
@@ -42,6 +45,11 @@ The first time, it asks for your accounts (name + e-mail) and saves them to
    window. Clicking it would open your normal browser, which may already be signed in as someone else.
 3. It checks you signed in as the right account. A wrong or duplicate account is removed again, and you're
    offered a retry.
+
+With `--chrome` (done first), each account gets a Chrome profile, "Claude · <name>". It opens on the Claude
+extension's store page and claude.ai: click **Add to Chrome** and sign in. To use a profile you already have
+for an account, run `claude-acct chrome use personal Default` (`claude-acct chrome profiles` lists them).
+Claude Code sign-ins then open in that profile instead of a private window.
 
 With `--desktop` it then does the same for the desktop app. For each account, Claude quits and reopens signed
 out, and you sign in once. Run that from **Terminal**, not from inside the Claude app.
@@ -55,6 +63,7 @@ the expired ones.
 |---|---|
 | Run Claude Code as an account | `claude-acct personal` (args pass through: `claude-acct work -p "…"`) |
 | See accounts | `claude-acct list`, `claude-acct desktop list` |
+| Claude in Chrome as an account | menu bar ▸ Claude in Chrome ▸ *account* (or `claude-acct chrome open work`) |
 | Switch the desktop app | menu bar ▸ Desktop app ▸ *account* (or `claude-acct desktop switch personal`) |
 | Usage limits | the menu bar number is each account's highest limit; open the menu for details, or `claude-usage --dump` |
 | Add one more account | `claude-acct add team me@team.org`, then `claude-acct desktop setup team` |
@@ -67,6 +76,8 @@ the expired ones.
 - **Desktop app**: its login is its claude.ai cookies + web storage + three keys in its `config.json`. A switch
   saves those for the current account and restores the other account's. Settings, Code sessions and worktrees
   aren't touched.
+- **Chrome**: profiles are Chrome's own mechanism for separate logins. The tool creates and names them and
+  remembers which is whose (`~/.config/claude-accounts/chrome.json`). It never edits an existing profile, and it never deletes one.
 - **Usage**: the menu app reads each account's token from the keychain and asks the same endpoint Claude Code's
   `/usage` uses. It refreshes an expired token exactly as Claude Code would.
 

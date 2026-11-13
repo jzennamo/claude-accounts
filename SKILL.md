@@ -19,18 +19,20 @@ macOS only. Three pieces, installed by `./install.sh` from this folder:
 |---|---|
 | `claude-acct` (`~/.local/bin`) | One Claude Code config dir per account (`~/.claude-accounts/<name>`; `default` = `~/.claude`), each with its own keychain token that refreshes itself, so each account signs in once. |
 | `claude-acct desktop …` | Switches the Claude **desktop app** by quitting it, swapping its saved claude.ai login (cookies, web storage, 3 keys in `config.json`) and reopening it. |
+| `claude-acct chrome …` | **Claude in Chrome**: one Chrome profile per account ("Claude · <name>"), each with the extension signed in to that account. `open <name>` opens it; Claude Code sign-ins for that account then open there (one click, no e-mail). |
 | Claude Usage menu bar app | Shows each Claude Code account's highest limit % in the menu bar, with 5-hour and weekly bars and reset times. The menu also has "Desktop app ▸" (switch the desktop app), "Open Claude Code as ▸", "Add account…" and "Sign in all my accounts…". |
 
 ## Commands
 
 ```bash
-claude-acct setup [FILE] [--desktop]   # sign in every account in a list (asks for the list the first time)
+claude-acct setup [FILE] [--chrome] [--desktop] [--all]   # sign in every account in a list (asks for the list the first time)
 claude-acct add <name> [email]         # one account
 claude-acct list                       # name → e-mail
 claude-acct <name> [claude args]       # run claude as that account
 eval "$(claude-acct env <name>)"       # make this shell use that account
 claude-acct rm <name>
 claude-acct desktop list | switch <name> | new | name <name> | forget <name> | setup <name>...
+claude-acct chrome list | profiles | add <name> [email] | use <name> <profile-dir> | open <name> [url] | forget <name>
 claude-usage --dump                    # print every account's limits (what the menu shows)
 ```
 
@@ -55,6 +57,8 @@ List file (`~/.config/claude-accounts/accounts`, see `accounts.example`): `<name
 |---|---|
 | The same account was added several times | The browser was already signed in to claude.ai, so it approved that account again. `add`/`setup` now use a private window and remove a sign-in that's a duplicate or the wrong e-mail. For an e-mail link, **copy** it into the private window (clicking opens the normal browser). |
 | Desktop switcher shows one account | Each desktop account needs one sign-in through `desktop new`/`setup`. If it came back as the same account, the desktop sign-in went through a browser signed in as that account: use "Continue with Google" with the other account, or paste the link into a private window. |
+| Claude in Chrome is signed in to the wrong account | Each profile holds one login: open that account's profile (menu ▸ Claude in Chrome), sign out of claude.ai there and sign in again. Don't switch accounts inside one profile. |
+| Chrome profile shows "extension NOT installed" | In that profile's window: Chrome Web Store ▸ Claude ▸ Add to Chrome (`claude-acct chrome add <name>` reopens the page). |
 | `claude-acct: command not found` | `~/.local/bin` isn't on the login-shell PATH; the installer prints the line for `~/.zprofile` / `~/.bash_profile`. |
 | Menu bar item missing | Behind the notch (too many menu bar icons). It starts next to the clock. ⌘-drag to move it; quit and reopen it from `~/Applications` if it's still hidden. |
 | `⚠︎ HTTP 401` / "not signed in" in the menu | The account's refresh token expired (about monthly): `claude-acct add <name> <email>` again. |

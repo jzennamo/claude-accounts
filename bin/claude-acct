@@ -2,7 +2,7 @@
 # claude-acct — use several Claude accounts on one Mac without signing in every time.
 #
 # Claude Code (CLI):
-#   claude-acct setup [FILE] [--desktop]  sign in every account in a list, one after another
+#   claude-acct setup [FILE] [--chrome] [--desktop]   sign in every account in a list, one after another
 #   claude-acct add <name> [email]        sign in one account (private browser window, e-mail pre-filled)
 #   claude-acct list                      accounts and their e-mails
 #   claude-acct <name> [claude args...]   run claude as that account
@@ -10,6 +10,8 @@
 #   claude-acct rm <name>                 forget an account (token deleted, folder to the Trash)
 # Claude desktop app:
 #   claude-acct desktop list|switch <name>|new|name <name>|forget <name>   (claude-acct desktop --help)
+# Claude in Chrome (one Chrome profile per account):
+#   claude-acct chrome list|add <name> [email]|use <name> <profile>|open <name>   (claude-acct chrome --help)
 #
 # Each account lives in its own config dir (~/.claude-accounts/<name>; "default" is ~/.claude) with its
 # own keychain token, so it is signed in once and then refreshes itself.
@@ -51,17 +53,24 @@ sign_in() {
     # share global instructions, settings and skills; history/projects stay per account
     for f in "${SHARED[@]}"; do [ -e "$HOME/.claude/$f" ] && [ ! -e "$d/$f" ] && ln -s "$HOME/.claude/$f" "$d/$f"; done
   fi
-  cat <<MSG
-
-── Signing in '$n'${email:+ as $email} ──
+  local prof; prof=$(python3 -I "$HERE/claude_acct_chrome.py" profile-dir "$n" 2>/dev/null || true)
+  # unset what a Claude terminal may export, so the login lands in this account's own folder
+  local envs=(-u CLAUDE_CONFIG_DIR -u CLAUDE_CODE_OAUTH_TOKEN)
+  echo; echo "── Signing in '$n'${email:+ as $email} ──"
+  if [ -n "$prof" ]; then
+    envs+=(BROWSER="$HERE/open-in-profile" CLAUDE_ACCT_PROFILE="$prof")
+    echo "The sign-in page opens in this account's own Chrome profile. If it's already signed in to"
+    echo "claude.ai there, just approve; otherwise sign in with ${email:-the account for '$n'}."
+  else
+    envs+=(BROWSER="$HERE/open-private")
+    cat <<MSG
 The sign-in page opens in a PRIVATE browser window, so your normal browser's claude.ai login
 (possibly another account) can't be reused by mistake.
   • Sign in with ${email:-the account you want for '$n'}.
   • If you get an e-mail link: don't click it (it opens in your normal browser).
     Right-click it ▸ Copy Link, and paste it into the private window.
 MSG
-  # unset what a Claude terminal may export, so the login lands in this account's own folder
-  local envs=(-u CLAUDE_CONFIG_DIR -u CLAUDE_CODE_OAUTH_TOKEN BROWSER="$HERE/open-private")
+  fi
   [ "$d" != "$HOME/.claude" ] && envs+=(CLAUDE_CONFIG_DIR="$d")
   if ! env "${envs[@]}" claude auth login ${email:+--email "$email"}; then
     echo "✗ $n: sign-in did not finish." >&2; return 1
@@ -94,8 +103,9 @@ in_claude_desktop() { # is this shell running inside the Claude desktop app?
 }
 
 setup() {
-  local file="" desktop=0 a n e d i rc
-  for a in "$@"; do case $a in --desktop) desktop=1;; -*) die "unknown option $a";; *) file=$a;; esac; done
+  local file="" desktop=0 chrome=0 a n e d i rc
+  for a in "$@"; do case $a in --desktop) desktop=1;; --chrome) chrome=1;; --all) desktop=1; chrome=1;;
+    -*) die "unknown option $a";; *) file=$a;; esac; done
   if [ -z "$file" ] && [ -f "$LIST_DEFAULT" ]; then file=$LIST_DEFAULT; fi
   if [ -z "$file" ]; then
     echo "List the accounts to sign in (leave the name blank to finish)."
@@ -122,6 +132,12 @@ setup() {
   done < <(read_list "$file")
   [ ${#names[@]} -gt 0 ] || die "no accounts in $file"
 
+  if [ "$chrome" = 1 ]; then  # first, so the Claude Code sign-ins below can open in each account's profile
+    echo "Claude in Chrome: a Chrome profile per account, with the extension signed in to that account."
+    local -a pairs=(); for i in "${!names[@]}"; do pairs+=("${names[$i]}=${emails[$i]}"); done
+    python3 -I "$HERE/claude_acct_chrome.py" setup "${pairs[@]}" || true
+    echo
+  fi
   echo "Claude Code: ${#names[@]} account(s) in $file"
   for i in "${!names[@]}"; do
     n=${names[$i]}; e=${emails[$i]}; d=$(dir_for "$n")
@@ -147,7 +163,8 @@ setup() {
   for i in "${!names[@]}"; do
     printf '  %-14s %-8s %s\n' "${names[$i]}" "${result[$i]:-?}" "$(email_of "$(dir_for "${names[$i]}")")"
   done
-  [ "$desktop" = 1 ] && { echo "Desktop app"; python3 -I "$HERE/claude-desktop-switch.py" list | sed 's/^/  /'; }
+  if [ "$chrome" = 1 ]; then echo "Chrome"; python3 -I "$HERE/claude_acct_chrome.py" list; fi
+  if [ "$desktop" = 1 ]; then echo "Desktop app"; python3 -I "$HERE/claude-desktop-switch.py" list | sed 's/^/  /'; fi
   return 0
 }
 
@@ -168,7 +185,9 @@ case "${1:-list}" in
     forget_login "$d"; echo "removed $n (folder in the Trash)";;
   desktop)
     shift; exec python3 -I "$HERE/claude-desktop-switch.py" "$@";;
-  -h|--help|help) sed -n '2,19p' "$0" | sed 's/^# \{0,1\}//';;
+  chrome)
+    shift; exec python3 -I "$HERE/claude_acct_chrome.py" "$@";;
+  -h|--help|help) sed -n '2,21p' "$0" | sed 's/^# \{0,1\}//';;
   *)
     n=$1; shift; d=$(dir_for "$n")
     [ -d "$d" ] || die "no account '$n' — claude-acct add $n"

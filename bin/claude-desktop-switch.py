@@ -194,9 +194,18 @@ def switch(target):
           "(once); next time it's in the switcher")
 
 
+def _line0():
+    """One line from fd 0 without read-ahead (tests pipe answers that later bash prompts also read)."""
+    b = b""
+    while True:
+        c = os.read(0, 1)
+        if not c or c == b"\n": return b.decode().strip()
+        b += c
+
+
 def tty_input(prompt):
     if os.environ.get("CLAUDE_ACCT_TTY") == "/dev/stdin":  # tests
-        print(prompt, end="", flush=True); return sys.stdin.readline().strip()
+        print(prompt, end="", flush=True); return _line0()
     with open("/dev/tty", "r+") as t:
         t.write(prompt); t.flush()
         return t.readline().strip()

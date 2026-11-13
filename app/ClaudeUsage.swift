@@ -340,6 +340,24 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         let nw = NSMenuItem(title: "Sign in another account…", action: #selector(newDesktop), keyEquivalent: ""); nw.target = self; dsub.addItem(nw)
         desk.submenu = dsub; menu.addItem(desk)
 
+        // Claude in Chrome: one Chrome profile per account
+        let chrome = NSMenuItem(title: "Claude in Chrome", action: nil, keyEquivalent: "")
+        let csub = NSMenu()
+        let cprofs = chromeProfiles()
+        for p in cprofs {
+            let mi = NSMenuItem(title: "\(p.name) — \(p.label)" + (p.extension ? "" : "  (extension not installed)"),
+                                action: #selector(openChrome(_:)), keyEquivalent: "")
+            mi.target = self; mi.representedObject = p.name; csub.addItem(mi)
+        }
+        let missing = discoverAccounts().filter { a in !cprofs.contains { $0.name == a.name } }
+        if !cprofs.isEmpty && !missing.isEmpty { csub.addItem(.separator()) }
+        for a in missing {
+            let email = usages.first { $0.account.name == a.name }?.email ?? a.email
+            let mi = NSMenuItem(title: "Set up a Chrome profile for \(a.name)…", action: #selector(addChrome(_:)), keyEquivalent: "")
+            mi.target = self; mi.representedObject = [a.name, email]; csub.addItem(mi)
+        }
+        chrome.submenu = csub; menu.addItem(chrome)
+
         let open = NSMenuItem(title: "Open Claude Code as", action: nil, keyEquivalent: "")
         let sub = NSMenu()
         for a in discoverAccounts() {
@@ -380,9 +398,32 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         terminal("cd ~ && claude-acct \(n)")
     }
 
-    /// Batch sign-in: asks for (or reads) the account list, then signs in each one — Claude Code, then the desktop app.
+    /// Batch sign-in: asks for (or reads) the account list, then sets up each one — Chrome profile, Claude Code, desktop app.
     @objc func setupAll() {
-        terminal("claude-acct setup --desktop; echo; read -p 'Press return to close.'")
+        terminal("claude-acct setup --all; echo; read -p 'Press return to close.'")
+    }
+
+    // MARK: Claude in Chrome (claude-acct chrome …)
+
+    struct ChromeProfile { let name: String; let label: String; let `extension`: Bool }
+
+    func chromeProfiles() -> [ChromeProfile] {
+        let (rc, s) = acct(["chrome", "list", "--json"])
+        guard rc == 0, let d = s.data(using: .utf8),
+              let rows = try? JSONSerialization.jsonObject(with: d) as? [[String: Any]] else { return [] }
+        return rows.map { ChromeProfile(name: $0["name"] as? String ?? "?", label: $0["label"] as? String ?? "",
+                                        extension: $0["extension"] as? Bool ?? false) }
+    }
+
+    @objc func openChrome(_ sender: NSMenuItem) {
+        guard let n = sender.representedObject as? String else { return }
+        DispatchQueue.global().async { _ = self.acct(["chrome", "open", n]) }
+    }
+
+    @objc func addChrome(_ sender: NSMenuItem) {
+        guard let v = sender.representedObject as? [String], v.count == 2 else { return }
+        let email = v[1].contains("@") ? " '\(v[1])'" : ""
+        terminal("claude-acct chrome add \(v[0])\(email); echo; read -p 'Press return to close.'")
     }
 
     @objc func addAccount() {

@@ -1,0 +1,5 @@
+#!/bin/bash
+# Used as $BROWSER for `claude auth login` when the account has its own Chrome profile: that profile is
+# already signed in to claude.ai as this account, so sign-in is one click (no e-mail link).
+if [ -n "${CLAUDE_ACCT_NO_LAUNCH:-}" ]; then echo "  [would open in Chrome profile $CLAUDE_ACCT_PROFILE]"; exit 0; fi
+open -na "Google Chrome" --args --profile-directory="$CLAUDE_ACCT_PROFILE" "$1"
